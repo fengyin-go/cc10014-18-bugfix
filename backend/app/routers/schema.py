@@ -30,6 +30,63 @@ def list_entries(
     return PageResult(items=items, total=total, page=page, size=size)
 
 
+# 固定路径必须声明在 /{entry_id} 之前，否则 /export、/ledger 会被当成明细编号。
+@router.get("/export")
+def export_entries() -> dict[str, Any]:
+    """导出接口文档清单：只导出已完成审核的字段清单，未发布文档不进入导出。"""
+    reviewed = {int(row.get("接口定义ID") or 0): row for row in service.ledger(reviewed_only=True)}
+    items = []
+    for entry in service.list_entries(page=1, size=10000)[0]:
+        ledger = reviewed.get(int(entry.get("id") or 0))
+        if ledger is None:
+            continue
+        merged = dict(entry)
+        merged.update({
+            "文档版本": ledger.get("文档版本"),
+            "字段清单": ledger.get("字段清单") or [],
+            "旧字段清单": ledger.get("旧字段清单") or [],
+            "错误码清单": ledger.get("错误码清单") or [],
+            "兼容级别": ledger.get("兼容级别"),
+            "台账审核状态": ledger.get("审核状态"),
+        })
+        items.append(merged)
+    return {
+        "module": "schema",
+        "total": len(items),
+        "items": items,
+        "字段": ["定义编号", "文档版本", "字段清单", "旧字段清单", "错误码清单", "兼容级别"],
+        "说明": "导出只读取已完成审核的字段清单；未审核或字段清单缺失的接口不导出。",
+    }
+
+
+@router.get("/ledger")
+def get_ledger(reviewed_only: bool = Query(default=False, description="只读取已完成审核的字段清单")) -> dict[str, Any]:
+    """接口字段台账：读取字段清单、旧字段清单、错误码清单与文档版本。"""
+    items = service.ledger(reviewed_only=reviewed_only)
+    return {"module": "schema", "total": len(items), "items": items}
+
+
+@router.get("/failures")
+def get_failures() -> dict[str, Any]:
+    """失败的登记/更新记录：中断后从这里接着重试。"""
+    items = service.failures()
+    return {"module": "schema", "total": len(items), "items": items}
+
+
+@router.post("/failures/{failure_id}/retry", response_model=ActionResult)
+def retry_failure(failure_id: int, payload: EntryPayload | None = None) -> ActionResult:
+    """按失败记录重新保存整份契约；可带修正后的字段，成功后清除失败状态。"""
+    if payload is None:
+        payload = EntryPayload()
+    entry, message = service.retry_failure(failure_id, payload.values)
+    if entry is None:
+        return ActionResult(ok=False, message=message)
+    return ActionResult(ok=True, message=message, entry=entry)
+
+
+# 静态路径 /export、/ledger、/failures 已声明在 /{entry_id} 之前，避免被当成明细编号。
+
+
 @router.get("/{entry_id}", response_model=dict)
 def get_entry(entry_id: int) -> dict:
     """读取单条接口定义明细；不存在时给出可读的错误说明。"""
@@ -41,11 +98,20 @@ def get_entry(entry_id: int) -> dict:
 
 @router.post("", response_model=ActionResult)
 def create_entry(payload: EntryPayload) -> ActionResult:
-    """登记一条接口定义，缺字段时说明原因而不是静默丢弃。"""
-    entry, missing = service.create_entry(payload.values)
-    if missing:
-        return ActionResult(ok=False, message=f"缺少必填字段：{'、'.join(missing)}")
-    return ActionResult(ok=True, message="接口定义已登记", entry=entry)
+    """登记一条接口定义，响应示例、错误码与文档版本必须一起保存。"""
+    entry, message, failure = service.create_entry(payload.values)
+    if entry is None:
+        return ActionResult(ok=False, message=message, entry=failure)
+    return ActionResult(ok=True, message=message, entry=entry)
+
+
+@router.put("/{entry_id}", response_model=ActionResult)
+def update_entry(entry_id: int, payload: EntryPayload) -> ActionResult:
+    """按接口定义更新契约；失败原因与重试记录一并返回。"""
+    entry, message, failure = service.update_entry(entry_id, payload.values)
+    if entry is None:
+        return ActionResult(ok=False, message=message, entry=failure)
+    return ActionResult(ok=True, message=message, entry=entry)
 
 
 @router.post("/{entry_id}/actions", response_model=ActionResult)
@@ -58,8 +124,10 @@ def run_action(entry_id: int, payload: EntryPayload) -> ActionResult:
     return ActionResult(ok=True, message=message, entry=entry)
 
 
-@router.get("/export")
-def export_entries() -> dict[str, Any]:
-    """导出接口文档清单：返回当前过滤条件下的全量数据。"""
-    items, total = service.list_entries(page=1, size=10000)
-    return {"module": "schema", "total": total, "items": items}
+@router.get("/{entry_id}/review")
+def review_entry(entry_id: int) -> dict[str, Any]:
+    """从文档版本及字段清单复核契约是否仍然一致。"""
+    ledger, message, issues = service.review(entry_id)
+    if ledger is None:
+        raise HTTPException(status_code=404, detail=message)
+    return {"ok": not issues, "message": message, "issues": issues, "ledger": ledger}

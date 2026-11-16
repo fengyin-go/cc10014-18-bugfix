@@ -13,6 +13,7 @@ import CacheView from './views/cache'
 import TransformView from './views/transform'
 import GatewayView from './views/gateway'
 import SchemaView from './views/schema'
+import SchemaDetailView from './views/schema/detail'
 import DatasourceView from './views/datasource'
 import QueryView from './views/query'
 import CleanseView from './views/cleanse'
@@ -56,6 +57,7 @@ export default function App() {
           <Route path="/transform" element={<TransformView />} />
           <Route path="/gateway" element={<GatewayView />} />
           <Route path="/schema" element={<SchemaView />} />
+          <Route path="/schema/:entryId" element={<SchemaDetailView />} />
           <Route path="/datasource" element={<DatasourceView />} />
           <Route path="/query" element={<QueryView />} />
           <Route path="/cleanse" element={<CleanseView />} />

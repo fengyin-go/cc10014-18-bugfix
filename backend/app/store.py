@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.seed import SEED_ROWS
+from app.seed import SEED_FAILURES, SEED_LEDGER, SEED_ROWS
 
 
 class Store:
@@ -14,6 +14,9 @@ class Store:
         self._tables: dict[str, list[dict[str, Any]]] = {
             name: [dict(row) for row in rows] for name, rows in SEED_ROWS.items()
         }
+        # 接口字段台账与失败记录属于接口文档的伴随存储，不参与模块概览的模块计数。
+        self._ledger: list[dict[str, Any]] = [dict(row) for row in SEED_LEDGER]
+        self._failures: list[dict[str, Any]] = [dict(row) for row in SEED_FAILURES]
 
     def module_names(self) -> list[str]:
         return sorted(self._tables)
@@ -24,6 +27,26 @@ class Store:
     def find(self, module: str, entry_id: int) -> dict[str, Any] | None:
         for row in self.rows(module):
             if int(row.get("id", 0)) == entry_id:
+                return row
+        return None
+
+    def ledger(self) -> list[dict[str, Any]]:
+        """接口字段台账：每个接口定义对应一条，按文档版本保存字段清单。"""
+        return self._ledger
+
+    def find_ledger(self, entry_id: int) -> dict[str, Any] | None:
+        for row in self._ledger:
+            if int(row.get("接口定义ID", 0)) == entry_id:
+                return row
+        return None
+
+    def failures(self) -> list[dict[str, Any]]:
+        """保存失败的记录，中断后可以从这里接着重试。"""
+        return self._failures
+
+    def find_failure(self, failure_id: int) -> dict[str, Any] | None:
+        for row in self._failures:
+            if int(row.get("id", 0)) == failure_id:
                 return row
         return None
 
